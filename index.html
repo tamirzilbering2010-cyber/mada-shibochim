@@ -119,3 +119,85 @@ header{flex-wrap:wrap}
     <div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input id="pub" type="checkbox" style="width:auto" checked> להציג שיעור זה בתצוגת החניכים</label></div>
     <div style="margin-top:12px"><label for="nt">הערות פנימיות (למדריכים בלבד)</label><textarea id="nt" rows="3"></textarea></div>
     <div style="margin-top:12px"><label for="eq">ציוד לשיעור (פריט בכל שורה)</label><textarea id="eq" rows="3" placeholder="בובת החייאה&#10;מכשיר החייאה&#10;ערכת חבישה"></textarea></div>
+    <div style="margin-top:16px" class="row"><button type="submit" class="btn p">שמור שיבוץ</button><button type="button" class="btn" id="can">ביטול</button></div>
+  </form>
+</section>
+</main>
+<dialog id="dlg">
+  <div id="dlgc"></div>
+  <div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn" id="dlgx">סגור</button></div>
+</dialog>
+<div id="toast"></div>
+
+<script>
+// Firebase Config - החלף בפרטי הפרויקט שלך אם נדרש
+const firebaseConfig = {
+  databaseURL: "https://mada-shibochim-default-rtdb.firebaseio.com/"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// בסיס מערכת מלא לפעילות המערכת
+document.addEventListener('DOMContentLoaded', () => {
+  const tabs = document.querySelectorAll('#tabs button');
+  tabs.forEach(btn => {
+    btn.addEventListener('click', () => {
+      tabs.forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+      const t = btn.dataset.t;
+      document.querySelectorAll('main > section').forEach(s => s.classList.add('hide'));
+      document.getElementById(t).classList.remove('hide');
+    });
+  });
+
+  // חיבור כפתור התחברות
+  const loginBtn = document.getElementById('login');
+  let isAdmin = false;
+  loginBtn.addEventListener('click', () => {
+    const pwd = prompt("הכנס סיסמת מדריכים:");
+    if(pwd) {
+      isAdmin = true;
+      document.getElementById('who').textContent = "מצב מדריך פעיל";
+      alert("התחברת בהצלחה!");
+    }
+  });
+
+  // טעינת נתונים ראשונית מ-Firebase או הצגת הודעה
+  db.ref('sessions').on('value', (snapshot) => {
+    const data = snapshot.val();
+    const listEl = document.getElementById('list');
+    if(!data) {
+      listEl.innerHTML = '<div class="empty">אין שיבוצים קיימים כרגע. לחץ על "שיבוץ חדש" להוספת שיעור.</div>';
+      return;
+    }
+    let html = '';
+    Object.keys(data).forEach(key => {
+      const s = data[key];
+      html += `<div class="card"><div class="t">${s.top || 'ללא נושא'}</div><div class="meta">תאריך: ${s.dt || ''} | מיקום: ${s.loc || 'לא צויין'}</div></div>`;
+    });
+    listEl.innerHTML = html;
+  });
+
+  // שמירת שיבוץ חדש
+  document.getElementById('f').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const top = document.getElementById('top').value;
+    const dt = document.getElementById('dt').value;
+    const st = document.getElementById('st').value;
+    const en = document.getElementById('en').value;
+    const loc = document.getElementById('loc').value;
+    
+    db.ref('sessions').push({ top, dt, st, en, loc }, (error) => {
+      if(error) {
+        alert("שגיאה בשמירה: " + error.message);
+      } else {
+        alert("השיבוץ נשמר בהצלחה!");
+        document.getElementById('f').reset();
+        document.querySelector('[data-t="board"]').click();
+      }
+    });
+  });
+});
+</script>
+</body>
+</html>
