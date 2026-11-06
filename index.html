@@ -119,85 +119,321 @@ header{flex-wrap:wrap}
     <div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input id="pub" type="checkbox" style="width:auto" checked> להציג שיעור זה בתצוגת החניכים</label></div>
     <div style="margin-top:12px"><label for="nt">הערות פנימיות (למדריכים בלבד)</label><textarea id="nt" rows="3"></textarea></div>
     <div style="margin-top:12px"><label for="eq">ציוד לשיעור (פריט בכל שורה)</label><textarea id="eq" rows="3" placeholder="בובת החייאה&#10;מכשיר החייאה&#10;ערכת חבישה"></textarea></div>
-    <div style="margin-top:16px" class="row"><button type="submit" class="btn p">שמור שיבוץ</button><button type="button" class="btn" id="can">ביטול</button></div>
+    <div class="acts" style="margin-top:16px"><button class="btn p" type="submit">שמירה</button><button class="btn" type="button" id="cx">ניקוי</button></div>
   </form>
 </section>
 </main>
-<dialog id="dlg">
-  <div id="dlgc"></div>
-  <div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn" id="dlgx">סגור</button></div>
-</dialog>
+<dialog id="dlg"></dialog><dialog id="cdlg"></dialog>
 <div id="toast"></div>
 
 <script>
-// Firebase Config - החלף בפרטי הפרויקט שלך אם נדרש
+// Firebase Initialization for GitHub Pages
 const firebaseConfig = {
   databaseURL: "https://mada-shibochim-default-rtdb.firebaseio.com/"
 };
 firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
+const rtdb = firebase.database();
 
-// בסיס מערכת מלא לפעילות המערכת
-document.addEventListener('DOMContentLoaded', () => {
-  const tabs = document.querySelectorAll('#tabs button');
-  tabs.forEach(btn => {
-    btn.addEventListener('click', () => {
-      tabs.forEach(b => b.classList.remove('on'));
-      btn.classList.add('on');
-      const t = btn.dataset.t;
-      document.querySelectorAll('main > section').forEach(s => s.classList.add('hide'));
-      document.getElementById(t).classList.remove('hide');
-    });
-  });
+const UID = localStorage.getItem('mda_uid') || (() => {
+  const v = 'u' + Math.random().toString(36).slice(2, 12);
+  try { localStorage.setItem('mda_uid', v) } catch(e) {}
+  return v;
+})();
 
-  // חיבור כפתור התחברות
-  const loginBtn = document.getElementById('login');
-  let isAdmin = false;
-  loginBtn.addEventListener('click', () => {
-    const pwd = prompt("הכנס סיסמת מדריכים:");
-    if(pwd) {
-      isAdmin = true;
-      document.getElementById('who').textContent = "מצב מדריך פעיל";
-      alert("התחברת בהצלחה!");
-    }
-  });
+let docs = {}, ls = [], loaded = false;
+const fire = () => ls.forEach(f => f());
 
-  // טעינת נתונים ראשונית מ-Firebase או הצגת הודעה
-  db.ref('sessions').on('value', (snapshot) => {
-    const data = snapshot.val();
-    const listEl = document.getElementById('list');
-    if(!data) {
-      listEl.innerHTML = '<div class="empty">אין שיבוצים קיימים כרגע. לחץ על "שיבוץ חדש" להוספת שיעור.</div>';
-      return;
-    }
-    let html = '';
-    Object.keys(data).forEach(key => {
-      const s = data[key];
-      html += `<div class="card"><div class="t">${s.top || 'ללא נושא'}</div><div class="meta">תאריך: ${s.dt || ''} | מיקום: ${s.loc || 'לא צויין'}</div></div>`;
-    });
-    listEl.innerHTML = html;
-  });
-
-  // שמירת שיבוץ חדש
-  document.getElementById('f').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const top = document.getElementById('top').value;
-    const dt = document.getElementById('dt').value;
-    const st = document.getElementById('st').value;
-    const en = document.getElementById('en').value;
-    const loc = document.getElementById('loc').value;
-    
-    db.ref('sessions').push({ top, dt, st, en, loc }, (error) => {
-      if(error) {
-        alert("שגיאה בשמירה: " + error.message);
-      } else {
-        alert("השיבוץ נשמר בהצלחה!");
-        document.getElementById('f').reset();
-        document.querySelector('[data-t="board"]').click();
-      }
-    });
-  });
+// Realtime Database Sync Adapter
+rtdb.ref('/').on('value', snapshot => {
+  docs = snapshot.val() || {};
+  loaded = true;
+  fire();
 });
+
+const docL = (p, cb) => {
+  let last, done = false;
+  const f = () => {
+    if (!loaded) return;
+    // p could be like 'lessons/id' or 'config/auth'
+    const parts = p.split('/');
+    let d = docs;
+    for (const part of parts) d = d ? d[part] : undefined;
+    
+    const s = JSON.stringify(d);
+    if (done && s === last) return;
+    done = true; last = s;
+    cb({ exists: d !== undefined, data: () => d });
+  };
+  ls.push(f); f();
+};
+
+const colL = (c, cb) => {
+  let prev = null;
+  const f = () => {
+    if (!loaded) return;
+    const sub = docs[c] || {};
+    const cur = {};
+    for (const k in sub) cur[c + '/' + k] = sub[k];
+    
+    const old = prev || {}, ch = [];
+    for (const p in cur) {
+      const t = !(p in old) ? 'added' : JSON.stringify(old[p]) !== JSON.stringify(cur[p]) ? 'modified' : null;
+      if (t) ch.push({ type: t, doc: { data: () => cur[p], metadata: { hasPendingWrites: false } } });
+    }
+    for (const p in old) if (!(p in cur)) ch.push({ type: 'removed', doc: { data: () => old[p], metadata: { hasPendingWrites: false } } });
+    if (prev && !ch.length) return;
+    prev = cur;
+    cb({ docs: Object.keys(cur).map(p => ({ data: () => cur[p] })), docChanges: () => ch });
+  };
+  ls.push(f); f();
+};
+
+const wr = async (p, d) => {
+  await rtdb.ref(p).set(d);
+};
+
+const DB = {
+  doc: p => ({
+    set: d => wr(p, d),
+    delete: () => wr(p, null),
+    onSnapshot: cb => docL(p, cb)
+  }),
+  collection: c => ({
+    onSnapshot: cb => colL(c, cb)
+  })
+};
+
+window.claude = { use: async n => n === 'db' ? DB : n === 'user' ? { canEdit: () => true, id: () => UID } : null };
+window.__refresh = () => {};
+window.chk = async h => {
+  const snap = await rtdb.ref('config/auth').once('value');
+  const auth = snap.val();
+  return auth && auth.h === h;
+};
 </script>
-</body>
-</html>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+let busy = false, L = [], INS = {}, TPL = [], FB = [], myFb = {}, tplDur = 0, fbSub = false, AS = null, U = null, AUTH = null, role = 'student', pend = [], mode = 'list', first = true, cur = new Date(); cur.setDate(1);
+try { myFb = JSON.parse(localStorage.getItem('mda_myfb') || '{}') } catch(e) {}
+let seen = {}; try { seen = JSON.parse(localStorage.getItem('mda_seen') || '{}') } catch(e) {}
+const inst = () => role === 'inst';
+const vis = () => inst() ? L : L.filter(l => l.pub);
+const sorted = a => [...a].sort((x, y) => (x.dt + x.st).localeCompare(y.dt + y.st));
+const saveSeen = () => { try { localStorage.setItem('mda_seen', JSON.stringify(seen)) } catch(e) {} };
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('s'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('s'), 3000); }
+const size = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+const hash = async p => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('mda:' + p)))].map(b => b.toString(16).padStart(2, '0')).join('');
+
+async function put(l) {
+  l.upd = Date.now();
+  if (DB) await DB.doc('lessons/' + l.id).set(l);
+}
+async function del(id) {
+  if (DB) await DB.doc('lessons/' + id).delete();
+}
+async function setAuth(h) {
+  if (DB) await DB.doc('config/auth').set({ h });
+}
+function onAuth() {
+  const ph = localStorage.getItem('mda_ph');
+  role = AUTH && ph && ph === AUTH.h ? 'inst' : 'student';
+  if (inst() && DB && !fbSub) {
+    fbSub = true;
+    DB.collection('feedback').onSnapshot(s => { FB = s.docs.map(d => d.data()); renderAll(); }, () => { fbSub = false; });
+  }
+  applyRole(); renderAll();
+}
+function baseline() {
+  if (first && localStorage.getItem('mda_seen') === null) { L.forEach(l => seen[l.id] = l.upd); saveSeen(); }
+  first = false;
+}
+async function initStore() {
+  try { if (window.claude) { DB = await claude.use('db'); AS = await claude.use('assets'); U = await claude.use('user'); } } catch(e) {}
+  if (DB) {
+    let ready = false;
+    DB.collection('lessons').onSnapshot(s => {
+      if (ready) s.docChanges().forEach(c => {
+        if (c.doc.metadata.hasPendingWrites) return;
+        const d = c.doc.data();
+        if (c.type === 'removed') toast('שיעור הוסר מהלוח');
+        else if (c.type === 'modified' && (inst() || (d && d.pub))) toast('עודכן: ' + d.top);
+        else if (c.type === 'added' && (inst() || (d && d.pub))) toast('שיעור חדש: ' + d.top);
+      });
+      L = s.docs.map(d => d.data()); ready = true; baseline(); renderAll();
+    }, () => toast('החיבור לנתונים המשותפים נכשל'));
+    DB.doc('config/auth').onSnapshot(s => { AUTH = s.exists ? s.data() : null; onAuth(); }, () => {});
+    DB.doc('config/templates').onSnapshot(s => { TPL = s.exists ? (s.data().list || []) : []; fillTpl(); }, () => {});
+    DB.doc('config/instructors').onSnapshot(s => { INS = s.exists ? (s.data().map || {}) : {}; renderAll(); }, () => {});
+  } else {
+    try { L = JSON.parse(localStorage.getItem('mda_lessons') || '[]'); AUTH = JSON.parse(localStorage.getItem('mda_auth') || 'null'); TPL = JSON.parse(localStorage.getItem('mda_tpl') || '[]'); INS = JSON.parse(localStorage.getItem('mda_ins') || '{}'); } catch(e) {}
+    baseline(); onAuth();
+  }
+}
+async function up(list) { return []; }
+async function rmFile(lid, fid) {}
+
+const pad = n => String(n).padStart(2, '0');
+const stamp = (d, t) => d.replace(/-/g, '') + 'T' + t.replace(':', '') + '00';
+const fdate = d => new Date(d + 'T00:00').toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+const today = ymd(new Date());
+const tmr = ymd(new Date(Date.now() + 864e5));
+const ttl = l => l.top + (inst() && l.ins ? ' – ' + l.ins : '');
+const details = l => (inst() && l.ins ? 'מדריך/ה: ' + l.ins + '\n' : '') + (l.pl ? 'תוכנית: ' + l.pl + '\n' : '') + (inst() && l.nt ? 'הערות: ' + l.nt : '');
+const gcal = l => 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent(ttl(l)) + '&dates=' + stamp(l.dt, l.st) + '/' + stamp(l.dt, l.en) + '&details=' + encodeURIComponent(details(l)) + '&location=' + encodeURIComponent(l.loc || '') + '&ctz=Asia/Jerusalem';
+const ie = s => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+const ics = l => ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//MDA Training//HE', 'BEGIN:VEVENT', 'UID:' + l.id + '@mda-training', 'DTSTAMP:' + new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z', 'DTSTART:' + stamp(l.dt, l.st), 'DTEND:' + stamp(l.dt, l.en), 'SUMMARY:' + ie(ttl(l)), 'LOCATION:' + ie(l.loc), 'DESCRIPTION:' + ie(details(l)), 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+async function saveAs(name, data) {
+  const u = URL.createObjectURL(data instanceof Blob ? data : new Blob([data])); const a = document.createElement('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); return true;
+}
+async function doIcs(l) { await saveAs((l.top + '-' + l.dt).replace(/[\\\/:*?"<>|\s]+/g, '_') + '.ics', ics(l)); }
+async function doCsv() {
+  if (!L.length) return toast('אין שיבוצים לייצוא');
+  const h = ['מדריך/ה', 'נושא', 'תאריך', 'התחלה', 'סיום', 'מיקום', 'תוכנית לחניכים', 'מוצג לחניכים', 'הערות פנימיות', 'קבצים'];
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const rows = sorted(L).map(l => [l.ins, l.top, l.dt, l.st, l.en, l.loc, l.pl, l.pub ? 'כן' : 'לא', l.nt, (l.files || []).map(f => f.name).join(' | ')].map(q).join(','));
+  await saveAs('syllabus-' + today + '.csv', '\ufeff' + [h.map(q).join(','), ...rows].join('\r\n'));
+  toast('הקובץ נשמר');
+}
+
+function filtered() {
+  const i = $('#fi').value, t = $('#ft').value.trim();
+  return sorted(vis()).filter(l => (!i || prs(l).some(x => x.i === i)) && (!t || l.top.includes(t)));
+}
+function fillFilter() {
+  const v = $('#fi').value, names = insNames().sort();
+  $('#fi').innerHTML = '<option value="">כל המדריכים</option>' + names.map(n => `<option ${n === v ? 'selected' : ''}>${esc(n)}</option>`).join('');
+}
+const unseen = () => vis().filter(l => !seen[l.id] || l.upd > seen[l.id]);
+function badge(l) { const s = seen[l.id]; return !s ? '<span class="badge">חדש</span>' : l.upd > s ? '<span class="badge u">עודכן</span>' : ''; }
+function renderBanner() {
+  const n = unseen().length; $('#chg').classList.toggle('hide', !n);
+  $('#chg').innerHTML = `<div class="row"><b class="grow">📢 ${n} שיעורים חדשים או שעודכנו מאז הביקור האחרון</b><button class="btn" data-a="seen">סימון כנקרא</button></div>`;
+}
+const wa = l => 'https://wa.me/?text=' + encodeURIComponent('תזכורת: ' + l.top + '\n📅 ' + fdate(l.dt) + '\n🕒 ' + l.st + '–' + l.en + (l.loc ? '\n📍 ' + l.loc : '') + (l.pl ? '\n\n' + l.pl : ''));
+const fbAll = l => FB.map(d => (d.byLesson || {})[l.id]).filter(Boolean);
+const fbAvg = l => { const a = fbAll(l); return a.length ? (a.reduce((s, x) => s + x.r, 0) / a.length).toFixed(1) : '–'; };
+function fillTpl() { const v = $('#tp').value; $('#tp').innerHTML = '<option value="">תבנית שיעור…</option>' + TPL.map(t => `<option value="${t.id}" ${t.id === v ? 'selected' : ''}>${esc(t.name)}</option>`).join(''); }
+const persistTpl = async () => { if (DB) await DB.doc('config/templates').set({ list: TPL }); };
+function calcEnd() { const s = $('#st').value; if (!tplDur || !s) return; const m = +s.slice(0, 2) * 60 + +s.slice(3) + tplDur; $('#en').value = pad(Math.floor(m / 60) % 24) + ':' + pad(m % 60); }
+async function saveTpl() {
+  const top = $('#top').value.trim(); if (!top) return toast('יש למלא נושא');
+  const name = await ask('שם התבנית', { input: top }); if (!name) return;
+  const s = $('#st').value, e = $('#en').value, mi = x => +x.slice(0, 2) * 60 + +x.slice(3);
+  TPL = [...TPL, { id: uid(), name, top, dur: s && e ? mi(e) - mi(s) : 0, st: s, en: e, loc: $('#loc').value.trim(), pl: $('#pl').value.trim(), nt: $('#nt').value.trim(), eq: $('#eq').value, pr: readPrs() }];
+  await persistTpl(); fillTpl(); toast('התבנית נשמרה');
+}
+function loadTpl() {
+  const t = TPL.find(x => x.id === $('#tp').value); if (!t) return toast('בחרו תבנית');
+  $('#top').value = t.top; $('#loc').value = t.loc || ''; $('#pl').value = t.pl || ''; $('#nt').value = t.nt || ''; $('#eq').value = t.eq || ''; setPrs(t.pr && t.pr.length ? t.pr : [{ p: '', i: '' }]); tplDur = t.dur || 0; if (t.st) { $('#st').value = t.st; $('#en').value = t.en || ''; } else calcEnd(); toast('התבנית נטענה');
+}
+const DEF = { 'תמיר': '#2e9e4f', 'מרים': '#c4161c', 'אביב': '#ff8fc7', 'נעמה': '#1f6fd6' };
+const prs = l => l.pr && l.pr.length ? l.pr : (l.ins ? [{ p: l.top, i: l.ins }] : []);
+const colorOf = n => (INS[n] && INS[n].c) || DEF[n] || '#6b7a90';
+const textOn = c => { const n = parseInt(c.slice(1), 16), r = n >> 16, g = n >> 8 & 255, b = n & 255; return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#1b1b1b' : '#fff'; };
+const prHtml = l => { const a = prs(l); return a.length ? `<div style="margin:6px 0">${a.map(x => { const c = colorOf(x.i); return `<span class="pill" style="background:${c};color:${textOn(c)}">${esc(x.p || l.top)}${x.i ? ' · ' + esc(x.i) : ''}</span>`; }).join('')}</div>` : ''; };
+const insNames = () => [...new Set([...Object.keys(DEF), ...Object.keys(INS), ...L.flatMap(l => prs(l).map(x => x.i)).filter(Boolean)])];
+const fillIl = () => { $('#il').innerHTML = insNames().map(n => `<option value="${esc(n)}">`).join(''); };
+const persistIns = async () => { if (DB) await DB.doc('config/instructors').set({ map: INS }); };
+const insRow = n => `<div class="row ir" style="margin:6px 0"><input class="in" value="${esc(n)}" placeholder="שם" style="flex:1;min-width:90px"><input class="ic" type="color" value="${colorOf(n)}" style="width:52px;padding:2px"><input class="ip" type="tel" placeholder="טלפון" value="${esc((INS[n] || {}).ph || '')}" style="flex:1.4;min-width:130px"></div>`;
+function insDlg() { $('#dlg').innerHTML = '<h3 style="margin-top:0">מדריכים: צבע וטלפון</h3>' + insNames().map(insRow).join('') + '<div id="insnew"></div><div class="acts"><button class="btn" data-a="insadd">+ מדריך</button><button class="btn p" data-a="inssave">שמירה</button><button class="btn" data-a="close">סגירה</button></div>'; $('#dlg').showModal(); }
+const rawPrs = () => [...document.querySelectorAll('#prs .pr')].map(r => ({ p: r.querySelector('.pp').value.trim(), i: r.querySelector('.pi').value.trim() }));
+const readPrs = () => rawPrs().filter(x => x.p || x.i);
+function setPrs(a) { $('#prs').innerHTML = a.map((x, n) => `<div class="row pr" style="margin:6px 0;padding:6px;border-radius:8px;background:${x.i ? colorOf(x.i) : 'var(--blue2)'}"><input class="pp" placeholder="שם המצגת" value="${esc(x.p)}" style="flex:2;min-width:130px"><input class="pi" list="il" placeholder="שם המדריך" value="${esc(x.i)}" style="flex:1;min-width:100px"><button type="button" class="btn d" data-a="prx" data-n="${n}">✕</button></div>`).join(''); }
+function ask(msg, o = {}) { return new Promise(r => { const d = $('#cdlg'); d.innerHTML = `<p style="margin-top:0">${esc(msg)}</p>${'input' in o ? `<input id="cin" value="${esc(o.input)}">` : ''}<div class="acts"><button class="btn p" id="cok">אישור</button><button class="btn" id="cno">ביטול</button></div>`; let v = null; d.onclose = () => r(v); $('#cok').onclick = () => { v = 'input' in o ? ($('#cin').value.trim() || null) : true; d.close(); }; $('#cno').onclick = () => d.close(); d.showModal(); }); }
+function mvDlg(l, d) { $('#dlg').innerHTML = `<h3 style="margin-top:0">${esc(l.top)}</h3><p>מה לעשות עם השיעור?</p><label for="md">תאריך יעד</label><input id="md" type="date" value="${d}"><div class="acts"><button class="btn p" data-a="mv" data-id="${l.id}">העבר לתאריך</button><button class="btn p" data-a="dup" data-id="${l.id}">שכפל לתאריך</button><button class="btn" data-a="close">ביטול</button></div>`; $('#dlg').showModal(); }
+const waNum = p => { let n = String(p || '').replace(/\D/g, ''); if (n.startsWith('0')) n = '972' + n.slice(1); return n; };
+function tomorrowRows() { const m = {}; L.filter(l => l.dt === tmr).forEach(l => prs(l).forEach(x => { if (x.i) (m[x.i] = m[x.i] || []).push({ l, p: x.p }); })); return m; }
+const remMsg = (n, a) => `היי ${n} 👋\nתיזכורת להדרכה מחר (${fdate(tmr)}):\n` + a.map(({ l, p }) => `• ${p} – ${l.st}–${l.en}${l.loc ? ' · ' + l.loc : ''}`).join('\n') + '\nבהצלחה!';
+function remDlg() { const m = tomorrowRows(), ks = Object.keys(m); $('#dlg').innerHTML = '<h3 style="margin-top:0">תזכורות למחר</h3>' + (ks.length ? ks.map(n => { const ph = waNum((INS[n] || {}).ph), c = colorOf(n); return `<div class="file"><span class="pill" style="background:${c};color:${textOn(c)}">${esc(n)}</span><span class="grow meta">${m[n].length} מצגות${ph ? '' : ' · אין מספר טלפון'}</span><a class="btn p" target="_blank" rel="noopener" href="https://wa.me/${ph}?text=${encodeURIComponent(remMsg(n, m[n]))}">שליחה בוואטסאפ</a></div>`; }).join('') : '<div class="empty">אין שיעורים מחר.</div>') + '<div class="acts"><button class="btn" data-a="close">סגירה</button></div>'; $('#dlg').showModal(); }
+function renderRem() { const n = Object.keys(tomorrowRows()).length, e = $('#rem'), on = inst() && n > 0; e.classList.toggle('hide', !on); if (on) e.innerHTML = `<div class="row"><b class="grow">⏰ מחר: ${n} מדריכים עם שיעור מחר</b><button class="btn p" data-a="remd">פתח תזכורות</button></div>`; }
+function card(l, dlg) {
+  const I = inst();
+  return `<div class="card ${l.dt < today ? 'past' : ''}">
+  <div class="t">${esc(l.top)} ${badge(l)}${l.dt === tmr ? '<span class="tag">מחר</span>' : ''}${I ? `<span class="tag">${l.pub ? 'מוצג לחניכים' : 'מוסתר מחניכים'}</span>` : ''}</div>
+  <div class="meta"><span>📅 ${fdate(l.dt)}</span><span>🕒 ${l.st}–${l.en}</span>${I ? `<span>👤 ${esc(l.ins)}</span>` : ''}${l.loc ? `<span>📍 ${esc(l.loc)}</span>` : ''}</div>
+  ${prHtml(l)}
+  ${l.pl ? `<div style="white-space:pre-wrap"><b>תוכנית השיעור:</b> ${esc(l.pl)}</div>` : ''}
+  <div class="acts">
+    <a class="btn" href="${gcal(l)}" target="_blank" rel="noopener">הוסף ל-Google Calendar</a>
+    <button class="btn" data-a="ics" data-id="${l.id}">הורד קובץ iCal (.ics)</button>
+    ${I ? `<a class="btn" href="${wa(l)}" target="_blank" rel="noopener">תזכורת בוואטסאפ</a>` : ''}
+    ${I ? `<button class="btn" data-a="edit" data-id="${l.id}">עריכה</button><button class="btn" data-a="mvb" data-id="${l.id}">העברה / שכפול</button><button class="btn d" data-a="del" data-id="${l.id}">מחיקה</button>` : ''}
+    ${dlg ? '<button class="btn" data-a="close">סגירה</button>' : ''}
+  </div></div>`;
+}
+function renderBoard() {
+  fillFilter();
+  const a = filtered();
+  $('#list').classList.toggle('hide', mode !== 'list');
+  $('#calw').classList.toggle('hide', mode !== 'cal');
+  if (mode === 'list') $('#list').innerHTML = a.length ? a.map(l => card(l)).join('') : `<div class="empty">אין שיעורים להצגה.${inst() ? '<br>הוסיפו שיבוץ בלשונית ״שיבוץ חדש״.' : ''}</div>`;
+  else renderCal(a);
+}
+function renderCal(a) {
+  const y = cur.getFullYear(), m = cur.getMonth(), first = new Date(y, m, 1).getDay(), dim = new Date(y, m + 1, 0).getDate();
+  $('#mt').textContent = cur.toLocaleDateString('he-IL', { month: 'long', year: 'numeric' });
+  let h = 'אבגדהוש'.split('').map(d => `<div class="h">${d}</div>`).join('');
+  const total = Math.ceil((first + dim) / 7) * 7;
+  for (let i = 0; i < total; i++) {
+    const d = new Date(y, m, i - first + 1), k = ymd(d), es = a.filter(l => l.dt === k);
+    const rows = es.flatMap(l => { const p = prs(l); return (p.length ? p : [{ p: l.top, i: '' }]).map(x => ({ l, x })); });
+    h += `<div class="c ${d.getMonth() !== m ? 'o' : ''} ${k === today ? 'td' : ''} ${es.length ? 'has' : ''}" data-d="${k}" ${inst() ? 'data-a="day"' : ''}><div class="n">${d.getDate()}</div>${rows.slice(0, 4).map(({ l, x }) => { const c = colorOf(x.i); return `<button class="chip" ${inst() ? 'draggable="true"' : ''} data-a="open" data-id="${l.id}" style="background:${x.i ? c : '#fff'};color:${x.i ? textOn(c) : '#222'}">${l.st} ${esc(x.p || l.top)}</button>`; }).join('')}${rows.length > 4 ? `<div class="more">+${rows.length - 4} נוספים</div>` : ''}</div>`;
+  }
+  $('#cal').innerHTML = h;
+}
+function renderAll() { renderBoard(); renderBanner(); fillTpl(); renderRem(); fillIl(); }
+function applyRole() {
+  document.querySelectorAll('[data-i]').forEach(e => e.classList.toggle('hide', !inst()));
+  $('#who').textContent = inst() ? 'מצב מדריכים' : 'מצב חניכים';
+  $('#login').textContent = inst() ? 'ניהול חשבון' : 'כניסת מדריכים';
+  if (!inst()) tab('board');
+}
+function tab(t) {
+  if (!inst()) t = 'board';
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  ['board', 'form'].forEach(s => $('#' + s).classList.toggle('hide', s !== t));
+  if (t === 'board') renderBoard();
+}
+function resetForm() {
+  $('#f').reset(); $('#id').value = ''; tplDur = 0; setPrs([{ p: '', i: '' }]); $('#pub').checked = true; $('#fh').textContent = 'שיבוץ חדש'; $('#dt').value = today;
+}
+function edit(id) {
+  const l = L.find(x => x.id === id); if (!l) return;
+  $('#dlg').close(); resetForm();
+  $('#id').value = id; $('#fh').textContent = 'עריכת שיבוץ';
+  ['ins', 'top', 'dt', 'st', 'en', 'loc', 'nt', 'pl'].forEach(k => $('#' + k).value = l[k] || '');
+  $('#pub').checked = !!l.pub; $('#eq').value = (l.eq || []).map(q => q.t).join('\n'); setPrs(prs(l).length ? prs(l) : [{ p: '', i: '' }]);
+  tab('form'); scrollTo(0, 0);
+}
+function loginDlg() {
+  const d = $('#dlg');
+  if (inst()) d.innerHTML = '<h3 style="margin-top:0">מצב מדריכים</h3><label for="np">סיסמה חדשה</label><input id="np" type="password"><div class="acts"><button class="btn p" data-a="chpw">שינוי סיסמה</button><button class="btn" data-a="logout">יציאה</button><button class="btn" data-a="close">סגירה</button></div>';
+  else d.innerHTML = '<h3 style="margin-top:0">כניסת מדריכים</h3><input id="pw" type="password" placeholder="סיסמה"><div class="acts"><button class="btn p" data-a="dologin">כניסה</button><button class="btn" data-a="close">סגירה</button></div>';
+  d.showModal();
+}
+const login = async h => { localStorage.setItem('mda_ph', h); $('#dlg').close(); onAuth(); toast('נכנסת למצב מדריכים'); };
+
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-a]'); if (!b) return;
+  const a = b.dataset.a, id = b.dataset.id, l = L.find(x => x.id === id);
+  try {
+    if (a === 'open') { $('#dlg').innerHTML = card(l, true); $('#dlg').showModal(); }
+    else if (a === 'close') $('#dlg').close();
+    else if (a === 'ics') doIcs(l);
+    else if (a === 'edit') edit(id);
+    else if (a === 'day') { const dd = b.dataset.d; resetForm(); $('#dt').value = dd; tab('form'); scrollTo(0, 0); }
+    else if (a === 'pra') { const r = rawPrs(); r.push({ p: '', i: '' }); setPrs(r); }
+    else if (a === 'prx') { const r = rawPrs(); r.splice(+b.dataset.n, 1); setPrs(r.length ? r : [{ p: '', i: '' }]); }
+    else if (a === 'mvb') mvDlg(l, l.dt);
+    else if (a === 'mv' || a === 'dup') { const nd = $('#md').value; if (!nd) return toast('בחרו תאריך'); const o = a === 'mv' ? { ...l, dt: nd } : { ...l, id: uid(), dt: nd, files: [], eq: (l.eq || []).map(q => ({ ...q, ok: false })) }; await put(o); seen[o.id] = o.upd; saveSeen(); $('#dlg').close(); toast(a === 'mv' ? 'השיעור הועבר' : 'השיעור שוכפל'); }
+    else if (a === 'insadd') $('#insnew').insertAdjacentHTML('beforeend', insRow(''));
+    else if (a === 'inssave') { const m = {}; document.querySelectorAll('#dlg .ir').forEach(r => { const n = r.querySelector('.in').value.trim(); if (n) m[n] = { c: r.querySelector('.ic').value, ph: r.querySelector('.ip').value.trim() }; }); INS = m; await persistIns(); $('#dlg').close(); toast('נשמר'); renderAll(); }
+    else if (a === 'remd') remDlg();
+    else if (a === 'seen') { vis().forEach(x => seen[x.id] = x.upd); saveSeen(); renderAll(); }
+    else if (a === 'del') { if (!await ask('למחוק את השיבוץ?')) return; await del(id); $('#dlg').close(); toast('השיעור נמחק'); }
+    else if (a === 'dologin') { const h = await hash($('#pw').value); (await chk(h)) ? login(h) : toast('סיסמה שגויה'); }
+    else if (a ===
