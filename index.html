@@ -52,8 +52,8 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1b2430;color:#fff;padding:10px 18px;border-radius:99px;opacity:0;pointer-events:none;transition:.25s;z-index:99;max-width:90vw}
 #toast.s{opacity:1}
 .hide{display:none!important}
-.time-selects{display:flex;align-items:center;gap:4px}
-.time-selects select{flex:1}
+.tp{display:flex;align-items:center;gap:4px;direction:ltr}
+.tp select{width:auto;flex:1}
 </style>
 
 <!-- Firebase SDKs -->
@@ -65,15 +65,13 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
   <h1><span class="cross"></span>מד״א · ניהול הדרכות</h1>
   <div class="row">
     <span id="who" class="tag">מצב חניך</span>
-    <button class="btn" id="insb" data-i>🎨 מדריכים</button>
-    <button class="btn" id="exp" data-i>ייצוא CSV</button>
     <button class="btn" id="login">כניסת מדריכים</button>
   </div>
 </header>
 
 <nav id="tabs">
   <button data-t="board" class="on">לוח שיבוצים</button>
-  <button data-t="form" data-i>שיבוץ חדש</button>
+  <button data-t="form" class="hide" data-i>שיבוץ חדש</button>
 </nav>
 
 <main>
@@ -81,10 +79,10 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
   <div class="card">
     <div class="row">
       <div class="seg" id="modes">
-        <button id="btn-list" class="on">רשימה</button>
-        <button id="btn-cal">לוח שנה</button>
+        <button data-m="list" class="on">רשימה</button>
+        <button data-m="cal">לוח שנה</button>
       </div>
-      <div class="grow" data-i style="min-width:140px">
+      <div class="grow" data-i style="min-width:140px; display:none">
         <select id="fi"><option value="">כל המדריכים</option></select>
       </div>
       <div class="grow" style="min-width:140px">
@@ -93,15 +91,15 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
     </div>
   </div>
 
-  <div id="list-view"></div>
+  <div id="list"></div>
 
-  <div id="cal-view" class="hide">
+  <div id="calw" class="hide">
     <div class="row" style="justify-content:space-between;margin-bottom:8px">
-      <button class="btn" id="cal-prev">◀ חודש קודם</button>
-      <b id="cal-month-title" style="font-size:16px"></b>
-      <button class="btn" id="cal-next">חודש הבא ▶</button>
+      <button class="btn" id="nx">◀ חודש הבא</button>
+      <b id="mt" style="font-size:16px"></b>
+      <button class="btn" id="pv">חודש קודם ▶</button>
     </div>
-    <div class="cal" id="cal-grid"></div>
+    <div class="cal" id="cal"></div>
   </div>
 </section>
 
@@ -125,15 +123,13 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
       </div>
       <div>
         <label>שעת התחלה *</label>
-        <div class="time-selects">
-          <select id="st-h"></select><b>:</b><select id="st-m"></select>
-        </div>
+        <span class="tp" data-f="st"></span>
+        <input id="st" type="hidden">
       </div>
       <div>
         <label>שעת סיום *</label>
-        <div class="time-selects">
-          <select id="en-h"></select><b>:</b><select id="en-m"></select>
-        </div>
+        <span class="tp" data-f="en"></span>
+        <input id="en" type="hidden">
       </div>
       <div>
         <label for="loc">מיקום / כיתה / צוות יעד</label>
@@ -159,16 +155,16 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 
     <div class="acts" style="margin-top:16px">
       <button class="btn p" type="submit">שמור שיבוץ</button>
-      <button class="btn" type="button" id="can-btn">ביטול</button>
+      <button class="btn" type="button" id="can">ביטול</button>
     </div>
   </form>
 </section>
 </main>
 
 <dialog id="dlg">
-  <div id="dlg-content"></div>
+  <div id="dlgc"></div>
   <div class="row" style="margin-top:14px;justify-content:flex-end">
-    <button class="btn" id="dlg-close">סגור</button>
+    <button class="btn" id="dlgx">סגור</button>
   </div>
 </dialog>
 <div id="toast"></div>
@@ -181,11 +177,11 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
-// Application State
 let isAdmin = false;
-let sessions = {};
+let sessionsData = {};
 let currentMode = 'list';
-let calDate = new Date();
+let currentCalDate = new Date();
+currentCalDate.setDate(1);
 
 function toast(msg) {
   const t = document.getElementById('toast');
@@ -194,343 +190,14 @@ function toast(msg) {
   setTimeout(() => t.classList.remove('s'), 3000);
 }
 
-// Time selects population
-function buildTimeOptions() {
-  const stH = document.getElementById('st-h'), enH = document.getElementById('en-h');
-  const stM = document.getElementById('st-m'), enM = document.getElementById('en-m');
+function pad(n) { return String(n).padStart(2, '0'); }
+
+// Time Picker Generator
+function initTime(id) {
+  const el = document.getElementById(id);
+  const w = document.querySelector('.tp[data-f="' + id + '"]');
+  const hs = '<option value="">שעה</option>' + [...Array(24).keys()].map(h => `<option value="${pad(h)}">${pad(h)}</option>`).join('');
+  const ms = '<option value="">דק׳</option>' + [...Array(12).keys()].map(k => `<option value="${pad(k * 5)}">${pad(k * 5)}</option>`).join('');
   
-  let hOpt = '<option value="">שעה</option>';
-  for(let i=0; i<24; i++) {
-    const v = String(i).padStart(2, '0');
-    hOpt += `<option value="${v}">${v}</option>`;
-  }
-  stH.innerHTML = enH.innerHTML = hOpt;
-
-  let mOpt = '<option value="">דקות</option>';
-  for(let i=0; i<60; i+=5) {
-    const v = String(i).padStart(2, '0');
-    mOpt += `<option value="${v}">${v}</option>`;
-  }
-  stM.innerHTML = enM.innerHTML = mOpt;
-}
-
-function getTimeValue(type) {
-  const h = document.getElementById(type + '-h').value;
-  const m = document.getElementById(type + '-m').value;
-  return (h && m) ? `${h}:${m}` : '';
-}
-
-function setTimeValue(type, val) {
-  if(!val || !val.includes(':')) {
-    document.getElementById(type + '-h').value = '';
-    document.getElementById(type + '-m').value = '';
-    return;
-  }
-  const [h, m] = val.split(':');
-  document.getElementById(type + '-h').value = h || '';
-  document.getElementById(type + '-m').value = m || '';
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  buildTimeOptions();
-  
-  // Navigation Tabs
-  const tabBtns = document.querySelectorAll('#tabs button');
-  tabBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      tabBtns.forEach(b => b.classList.remove('on'));
-      btn.classList.add('on');
-      const target = btn.dataset.t;
-      document.querySelectorAll('main > section').forEach(s => s.classList.add('hide'));
-      document.getElementById(target).classList.remove('hide');
-    });
-  });
-
-  // Toggle Modes (List / Calendar)
-  document.getElementById('btn-list').addEventListener('click', () => {
-    document.getElementById('btn-list').classList.add('on');
-    document.getElementById('btn-cal').classList.remove('on');
-    document.getElementById('list-view').classList.remove('hide');
-    document.getElementById('cal-view').classList.add('hide');
-    currentMode = 'list';
-  });
-
-  document.getElementById('btn-cal').addEventListener('click', () => {
-    document.getElementById('btn-cal').classList.add('on');
-    document.getElementById('btn-list').classList.remove('on');
-    document.getElementById('list-view').classList.add('hide');
-    document.getElementById('cal-view').classList.remove('hide');
-    currentMode = 'cal';
-    renderCalendar();
-  });
-
-  // Calendar Nav
-  document.getElementById('cal-prev').addEventListener('click', () => {
-    calDate.setMonth(calDate.getMonth() - 1);
-    renderCalendar();
-  });
-  document.getElementById('cal-next').addEventListener('click', () => {
-    calDate.setMonth(calDate.getMonth() + 1);
-    renderCalendar();
-  });
-
-  // Admin Login
-  const loginBtn = document.getElementById('login');
-  loginBtn.addEventListener('click', () => {
-    if(!isAdmin) {
-      const pwd = prompt("הכנס סיסמת מדריכים:");
-      if(pwd) {
-        isAdmin = true;
-        document.getElementById('who').textContent = "מצב מדריך פעיל";
-        loginBtn.textContent = "יציאה ממצב מדריך";
-        document.querySelectorAll('[data-i]').forEach(el => el.classList.remove('hide'));
-        toast("התחברת בהצלחה!");
-        renderAll();
-      }
-    } else {
-      isAdmin = false;
-      document.getElementById('who').textContent = "מצב חניך";
-      loginBtn.textContent = "כניסת מדריכים";
-      document.querySelectorAll('[data-i]').forEach(el => el.classList.add('hide'));
-      toast("יצאת ממצב מדריך.");
-      renderAll();
-    }
-  });
-
-  // Initially hide admin buttons
-  document.querySelectorAll('[data-i]').forEach(el => el.classList.add('hide'));
-
-  // Cancel Form
-  document.getElementById('can-btn').addEventListener('click', () => {
-    resetForm();
-    document.querySelector('[data-t="board"]').click();
-  });
-
-  // Dialog Close
-  document.getElementById('dlg-close').addEventListener('click', () => {
-    document.getElementById('dlg').close();
-  });
-
-  // Listeners for inputs
-  document.getElementById('ft').addEventListener('input', renderAll);
-  document.getElementById('fi').addEventListener('change', renderAll);
-
-  // Form Submit
-  document.getElementById('f').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const st = getTimeValue('st');
-    const en = getTimeValue('en');
-    
-    if(!st || !en) {
-      alert("יש לבחור שעת התחלה וסיום מלאות.");
-      return;
-    }
-
-    const id = document.getElementById('id').value;
-    const sessionData = {
-      top: document.getElementById('top').value.trim(),
-      ins: document.getElementById('ins').value.trim(),
-      dt: document.getElementById('dt').value,
-      st: st,
-      en: en,
-      loc: document.getElementById('loc').value.trim(),
-      pl: document.getElementById('pl').value.trim(),
-      pub: document.getElementById('pub').checked,
-      nt: document.getElementById('nt').value.trim()
-    };
-
-    const targetRef = id ? db.ref('sessions/' + id) : db.ref('sessions').push();
-    targetRef.set(sessionData, (err) => {
-      if(err) {
-        toast("שגיאה בשמירה: " + err.message);
-      } else {
-        toast("השיבוץ נשמר בהצלחה!");
-        resetForm();
-        document.querySelector('[data-t="board"]').click();
-      }
-    });
-  });
-
-  // Firebase Realtime Listener
-  db.ref('sessions').on('value', (snapshot) => {
-    sessions = snapshot.val() || {};
-    renderAll();
-  });
-});
-
-function resetForm() {
-  document.getElementById('f').reset();
-  document.getElementById('id').value = '';
-  setTimeValue('st', '');
-  setTimeValue('en', '');
-  document.getElementById('fh').textContent = 'שיבוץ חדש';
-}
-
-function renderAll() {
-  updateInstructorFilter();
-  renderList();
-  if(currentMode === 'cal') renderCalendar();
-}
-
-function updateInstructorFilter() {
-  const sel = document.getElementById('fi');
-  const curr = sel.value;
-  const insList = new Set();
-  
-  Object.values(sessions).forEach(s => {
-    if(s.ins) insList.add(s.ins);
-  });
-
-  let html = '<option value="">כל המדריכים</option>';
-  insList.forEach(name => {
-    html += `<option value="${name}" ${name === curr ? 'selected' : ''}>${name}</option>`;
-  });
-  sel.innerHTML = html;
-}
-
-function getFilteredSessions() {
-  const filterText = document.getElementById('ft').value.toLowerCase();
-  const filterIns = document.getElementById('fi').value;
-
-  const keys = Object.keys(sessions).sort((a,b) => {
-    const sA = sessions[a], sB = sessions[b];
-    return (sA.dt + sA.st).localeCompare(sB.dt + sB.st);
-  });
-
-  return keys.filter(key => {
-    const s = sessions[key];
-    if(!isAdmin && s.pub === false) return false;
-    if(filterIns && s.ins !== filterIns) return false;
-    if(filterText && !s.top.toLowerCase().includes(filterText)) return false;
-    return true;
-  });
-}
-
-function renderList() {
-  const listEl = document.getElementById('list-view');
-  const filteredKeys = getFilteredSessions();
-
-  if(filteredKeys.length === 0) {
-    listEl.innerHTML = '<div class="empty">אין שיבוצים להצגה כרגע.</div>';
-    return;
-  }
-
-  let html = '';
-  filteredKeys.forEach(key => {
-    const s = sessions[key];
-    html += `
-      <div class="card">
-        <div class="t">${s.top}</div>
-        <div class="meta">
-          <span>📅 ${s.dt}</span>
-          <span>⏰ ${s.st} - ${s.en}</span>
-          <span>👤 ${s.ins}</span>
-          <span>📍 ${s.loc || 'לא צויין'}</span>
-        </div>
-        ${s.pl ? `<div style="margin-top:6px"><b>תוכנית:</b> ${s.pl}</div>` : ''}
-        ${isAdmin && s.nt ? `<div style="margin-top:6px;color:var(--red)"><b>הערות מדריך:</b> ${s.nt}</div>` : ''}
-        <div class="acts">
-          <button class="btn" onclick="openDetails('${key}')">פרטים מלאים</button>
-          ${isAdmin ? `
-            <button class="btn p" onclick="editSession('${key}')">עריכה</button>
-            <button class="btn d" onclick="deleteSession('${key}')">מחיקה</button>
-          ` : ''}
-        </div>
-      </div>
-    `;
-  });
-
-  listEl.innerHTML = html;
-}
-
-function renderCalendar() {
-  const grid = document.getElementById('cal-grid');
-  const title = document.getElementById('cal-month-title');
-  
-  const y = calDate.getFullYear();
-  const m = calDate.getMonth();
-  
-  const monthNames = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-  title.textContent = `${monthNames[m]} ${y}`;
-
-  const firstDay = new Date(y, m, 1).getDay();
-  const daysInMonth = new Date(y, m + 1, 0).getDate();
-
-  let html = ['א','ב','ג','ד','ה','ו','ש'].map(d => `<div class="h">${d}</div>`).join('');
-
-  for(let i=0; i<firstDay; i++) {
-    html += `<div class="c o"></div>`;
-  }
-
-  const todayStr = new Date().toISOString().split('T')[0];
-
-  for(let d=1; d<=daysInMonth; d++) {
-    const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    
-    const dayKeys = Object.keys(sessions).filter(k => {
-      const s = sessions[k];
-      return s.dt === dateStr && (isAdmin || s.pub !== false);
-    });
-
-    const isToday = dateStr === todayStr ? 'td' : '';
-    const hasClass = dayKeys.length > 0 ? 'has' : '';
-
-    html += `<div class="c ${hasClass} ${isToday}">`;
-    html += `<div class="n">${d}</div>`;
-    
-    dayKeys.forEach(k => {
-      const s = sessions[k];
-      html += `<button class="chip" onclick="openDetails('${k}')">${s.st} ${s.top}</button>`;
-    });
-
-    html += `</div>`;
-  }
-
-  grid.innerHTML = html;
-}
-
-function openDetails(key) {
-  const s = sessions[key];
-  if(!s) return;
-  const dlgContent = document.getElementById('dlg-content');
-  dlgContent.innerHTML = `
-    <h2>${s.top}</h2>
-    <p><b>תאריך:</b> ${s.dt}</p>
-    <p><b>שעות:</b> ${s.st} - ${s.en}</p>
-    <p><b>מדריך:</b> ${s.ins}</p>
-    <p><b>מיקום:</b> ${s.loc || 'לא צויין'}</p>
-    ${s.pl ? `<p><b>תוכנית השיעור:</b><br>${s.pl.replace(/\n/g,'<br>')}</p>` : ''}
-    ${isAdmin && s.nt ? `<p style="color:var(--red)"><b>הערות פנימיות:</b><br>${s.nt.replace(/\n/g,'<br>')}</p>` : ''}
-  `;
-  document.getElementById('dlg').showModal();
-}
-
-function editSession(key) {
-  const s = sessions[key];
-  if(!s) return;
-  
-  document.getElementById('id').value = key;
-  document.getElementById('top').value = s.top || '';
-  document.getElementById('ins').value = s.ins || '';
-  document.getElementById('dt').value = s.dt || '';
-  setTimeValue('st', s.st || '');
-  setTimeValue('en', s.en || '');
-  document.getElementById('loc').value = s.loc || '';
-  document.getElementById('pl').value = s.pl || '';
-  document.getElementById('pub').checked = s.pub !== false;
-  document.getElementById('nt').value = s.nt || '';
-  
-  document.getElementById('fh').textContent = 'עריכת שיבוץ';
-  document.querySelector('[data-t="form"]').click();
-}
-
-function deleteSession(key) {
-  if(confirm("להסיר שיבוץ זה?")) {
-    db.ref('sessions/' + key).remove((err) => {
-      if(!err) toast("השיבוץ נמחק בהצלחה.");
-    });
-  }
-}
-</script>
-</body>
-</html>
+  w.innerHTML = `<select class="th" aria-label="שעה">${hs}</select><b>:</b><select class="tm" aria-label="דקות">${ms}</select>`;
+  const h = w.querySelector('.th'), m = w.
